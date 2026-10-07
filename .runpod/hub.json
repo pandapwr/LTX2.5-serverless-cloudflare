@@ -22,6 +22,16 @@
         }
       },
       {
+        "key": "LTX25_USE_RUNPOD_CACHE",
+        "input": {
+          "name": "Use Runpod Cached Models",
+          "type": "boolean",
+          "description": "Prefer files from the endpoint's Hugging Face model cache; missing files use existing assets or downloads",
+          "default": true,
+          "advanced": true
+        }
+      },
+      {
         "key": "PERSIST_WORKSPACE",
         "input": {
           "name": "Persist /workspace",

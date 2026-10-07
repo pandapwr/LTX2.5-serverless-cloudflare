@@ -11,6 +11,7 @@ Generate LTX 2.5 image-to-video on RunPod without rebuilding the same GPU enviro
 - ComfyUI for visual workflow editing and advanced control
 - A RunPod serverless handler for `/run` and `/runsync`
 - Cloudflare R2 or AWS S3 artifact uploads with private, signed download links
+- Runpod Hugging Face model-cache support with automatic download fallback
 - Automatic first-boot model downloads to persistent storage
 - Persistent models, ComfyUI state, Python environment, and caches under `/workspace`
 - Separate workflows for API execution and the ComfyUI editor
@@ -27,7 +28,7 @@ notrius/ltx-2.5-serverless:cu130
 You will need:
 
 - A RunPod GPU with at least **48 GB VRAM** for the default distilled INT8 profile
-- At least **100 GB persistent storage** for models and caches
+- At least **100 GB persistent storage** when storing the model stack on a volume, or sufficient container disk space for files outside the Runpod model cache
 - Acceptance of the model terms on [Lightricks/LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5)
 - A Hugging Face access token if the model download requires authenticated access
 
@@ -57,6 +58,21 @@ HUGGINGFACE_ACCESS_TOKEN=hf_xxx
 The first cold start is the expensive one. Later workers reuse the models and download/compiler caches from the attached volume.
 
 Redis needs no separate service or account. Leave `REDIS_URL` unset: each worker starts its own local Redis for job tracking, result caching, and duplicate-job prevention. External Redis connections are disabled, and Redis state is neither shared across workers nor saved across container replacement. Interactive pod mode does not use Redis. See [Redis and cached results](docs/configuration.md#redis-and-cached-results).
+
+### Use Runpod's Hugging Face model cache
+
+For a Serverless endpoint running an image built with this support, select
+`Lightricks/LTX-2.5` in Runpod's **Model / cached model** field and provide a token
+with accepted model access. Startup automatically links cached weights into
+ComfyUI's model folders, so inference reads the host-local files directly.
+Missing files use the existing asset/download path; the separately hosted Gemma
+prompt enhancer still downloads unless its files are also cached.
+
+You can keep the network volume for persistent state and fallback downloads. To
+run without a network volume, set `PERSIST_WORKSPACE=false`; ComfyUI runs from the
+image and uses the cached weights. Cache reuse is enabled by default through
+`LTX25_USE_RUNPOD_CACHE=true`. See [cached-model configuration](docs/configuration.md#runpod-cached-models)
+for the complete environment settings and current Runpod limitations.
 
 ### Run a worker job
 

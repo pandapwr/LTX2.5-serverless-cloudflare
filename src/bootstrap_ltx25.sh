@@ -10,6 +10,16 @@ ltx_hf_token() {
     printf '%s\n' "${HF_TOKEN:-${HUGGINGFACE_TOKEN:-${HUGGINGFACE_ACCESS_TOKEN:-}}}"
 }
 
+ltx_link_runpod_cache() {
+    [ "${LTX25_USE_RUNPOD_CACHE:-true}" = "true" ] || return 1
+    local cache_root="${RUNPOD_HF_CACHE_ROOT:-/runpod-volume/huggingface-cache/hub}"
+    [ -d "${cache_root}" ] || return 1
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    python "${script_dir}/runpod_model_cache.py" "$1" "$2" \
+        --cache-root "${cache_root}"
+}
+
 ltx_download_with_wget() {
     local url="$1"
     local output_path="$2"
@@ -68,9 +78,18 @@ ltx_download() {
     local backend="${LTX25_DOWNLOAD_BACKEND:-auto}"
 
     mkdir -p "$(dirname "${output_path}")"
+    if ltx_link_runpod_cache "${url}" "${output_path}"; then
+        return
+    fi
     if [ -f "${output_path}" ]; then
         ltx_log "LTX asset already present: ${output_path}"
         return
+    fi
+
+    # A volume may retain a cache link from a different host or revision.
+    # Remove dangling links before either downloader writes the replacement.
+    if [ -L "${output_path}" ]; then
+        rm "${output_path}"
     fi
 
     case "${backend}" in

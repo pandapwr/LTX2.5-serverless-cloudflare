@@ -24,6 +24,8 @@ The container is configured through environment variables. The model profile bak
 | `LTX25_PRELOAD_VARIANT` | Startup model profile. Supported value: `distilled-int8`; empty disables preload. | image default |
 | `LTX25_PRELOAD_PROMPT_ENHANCER` | Download the Gemma 4 prompt enhancer when a profile is enabled. | `true` |
 | `LTX25_DOWNLOAD_BACKEND` | `auto`, `hf_hub`, or `wget`. | `auto` |
+| `LTX25_USE_RUNPOD_CACHE` | Prefer Runpod's mounted Hugging Face cache before existing assets or downloads. | `true` |
+| `RUNPOD_HF_CACHE_ROOT` | Root of the mounted Hugging Face hub cache; independent of `HF_HOME`. | `/runpod-volume/huggingface-cache/hub` |
 | `HUGGINGFACE_ACCESS_TOKEN` | Hugging Face read token used for gated downloads. `HF_TOKEN` and `HUGGINGFACE_TOKEN` are accepted aliases. | unset |
 
 Accept the [LTX 2.5 model terms](https://huggingface.co/Lightricks/LTX-2.5) before first boot. A token is required while the gated files are missing; an already-populated persistent volume does not need to redownload them.
@@ -38,6 +40,47 @@ LTX25_PRELOAD_VARIANT=distilled-int8
 LTX25_PRELOAD_PROMPT_ENHANCER=true
 HUGGINGFACE_ACCESS_TOKEN=hf_xxx
 ```
+
+### Runpod cached models
+
+In the Serverless endpoint's **Model / cached model** field, select
+`Lightricks/LTX-2.5` and provide a Hugging Face read token with accepted model
+terms. Use an image rebuilt with this cache support.
+
+Startup resolves the cache's `models--Lightricks--LTX-2.5/snapshots/<commit>/`
+directory and symlinks the required weights into ComfyUI's model folders. It
+prefers cached files even when downloaded copies already exist on a network
+volume. No large model files are copied and the mounted cache is never modified.
+Links are refreshed at startup for the mounted revision. Missing files fall back
+to existing assets or the configured download backend, including recovery from
+dangling cache links left by a previous worker.
+
+With **no attached network volume**, keep the runtime workspace inside the image:
+
+```env
+RUN_MODE=worker
+PERSIST_WORKSPACE=false
+LTX25_PRELOAD_VARIANT=distilled-int8
+LTX25_USE_RUNPOD_CACHE=true
+LTX25_PRELOAD_PROMPT_ENHANCER=true
+HUGGINGFACE_ACCESS_TOKEN=hf_xxx
+```
+
+With an attached network volume, leave `PERSIST_WORKSPACE=true` to retain ComfyUI,
+the Python environment, workflows, and files downloaded on a cache miss. Cached
+weights still load directly from the host cache. Selecting a cached model does
+not create a persistent network volume, despite the shared `/runpod-volume` path.
+
+The Gemma prompt enhancer is hosted separately in `Comfy-Org/gemma-4`, so it still
+downloads when only the LTX repository is cached. Keep the worker's token
+configured for any authenticated fallback downloads. `HF_HUB_OFFLINE` should
+remain unset when these downloads are needed.
+
+Runpod currently documents one cached repository per endpoint and downloads all
+model variants in that repository. See [Runpod cached models](https://docs.runpod.io/serverless/endpoints/model-caching).
+For an ambiguous cache with several snapshots and no ref, the worker uses the
+download fallback rather than guessing a revision. Set
+`LTX25_USE_RUNPOD_CACHE=false` to retain the existing asset/download behavior.
 
 ## Persistent workspace
 

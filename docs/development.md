@@ -35,6 +35,8 @@ bash tests/test_bootstrap_workspace.sh
 bash tests/test_bootstrap_ltx25.sh
 
 python3 -m unittest \
+  tests.test_handler_health \
+  tests.test_artifact_storage \
   tests.test_ltx_payload_builder \
   tests.test_ltx25_workflow \
   tests.test_verify_comfy_models \
@@ -75,7 +77,7 @@ Before publishing a release:
 2. Boot it on the intended Blackwell GPU and CUDA-compatible driver.
 3. Confirm the preload is reused after restart.
 4. Run the checked-in I2V workflow through the handler.
-5. Verify the returned video and S3 mode if enabled.
+5. Verify the returned video and R2/S3 mode if enabled, including downloading an uploaded artifact with its signed URL.
 6. Repeat on the CUDA 12.8 target only if that fallback will be published.
 
 Passing host tests proves the plumbing is coherent. It does not prove a 22B video model fits, starts, or renders on a GPU that was never involved.

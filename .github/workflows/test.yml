@@ -56,9 +56,10 @@ jobs:
 
       - name: Run workflow and payload tests
         run: |
-          python3 -m pip install 'aiohttp>=3.13.0,<4' 'fastapi>=0.116.0,<1' 'httpx>=0.28,<1'
+          python3 -m pip install 'aiohttp>=3.13.0,<4' 'fastapi>=0.116.0,<1' 'httpx>=0.28,<1' 'boto3>=1.40.0,<2'
           python3 -m unittest \
             tests.test_handler_health \
+            tests.test_artifact_storage \
             tests.test_ltx_payload_builder \
             tests.test_ltx25_workflow \
             tests.test_verify_comfy_models \

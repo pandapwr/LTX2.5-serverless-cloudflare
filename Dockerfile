@@ -98,7 +98,7 @@ WORKDIR /comfyui
 COPY src/extra_model_paths.yaml ./extra_model_paths.yaml
 
 WORKDIR /
-COPY src/start.sh src/bootstrap_workspace.sh src/bootstrap_ltx25.sh src/verify_comfy_models.py src/network_volume.py handler.py workflow_support.py frontend_app.py ltx_payload_builder.py video_ltx2_5_i2v_API.json test_input.json ./
+COPY src/start.sh src/bootstrap_workspace.sh src/bootstrap_ltx25.sh src/runpod_model_cache.py src/verify_comfy_models.py src/network_volume.py handler.py workflow_support.py frontend_app.py ltx_payload_builder.py video_ltx2_5_i2v_API.json test_input.json ./
 COPY frontend /frontend
 COPY scripts/comfy-node-install.sh /usr/local/bin/comfy-node-install
 COPY scripts/comfy-manager-set-mode.sh /usr/local/bin/comfy-manager-set-mode

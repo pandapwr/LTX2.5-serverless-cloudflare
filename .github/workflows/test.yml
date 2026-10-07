@@ -60,6 +60,7 @@ jobs:
           python3 -m unittest \
             tests.test_handler_health \
             tests.test_artifact_storage \
+            tests.test_runpod_model_cache \
             tests.test_ltx_payload_builder \
             tests.test_ltx25_workflow \
             tests.test_verify_comfy_models \

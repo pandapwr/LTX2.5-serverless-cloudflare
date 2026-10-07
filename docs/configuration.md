@@ -80,7 +80,7 @@ The handler and bundled frontend execute `/video_ltx2_5_i2v_API.json`. ComfyUI's
 | `COMFYUI_MANAGER_CONFIG` | Manager `config.ini` updated during startup. | `/comfyui/user/__manager/config.ini` |
 | `REDIS_URL` | Local Redis only. Leave unset; external servers and URL options are rejected. Accepts `127.0.0.1` or `localhost` on port `6379`, with no path, `/`, or `/0`; always connects to `127.0.0.1`. | `redis://127.0.0.1:6379` |
 | `CACHE_TTL_SECONDS` | Successful response cache lifetime in seconds. | `604800` |
-| `MAX_INLINE_VIDEO_MB` | Maximum inline video response size before S3 becomes mandatory. | `50` |
+| `MAX_INLINE_VIDEO_MB` | Maximum inline video response size before R2 or S3 uploads become mandatory. | `50` |
 | `INDRO_API_KEY` | Authentication for the legacy `prompt` + `image_url` path only. | `dev_token_123` |
 
 ## Redis and cached results
@@ -90,23 +90,103 @@ Redis is the worker's temporary job notebook. In `worker` and `local-api` modes,
 The worker stores the following in Redis:
 
 - Job status and progress, duplicate-job locks, and temporarily unavailable ComfyUI nodes.
-- Completed responses for `CACHE_TTL_SECONDS` (seven days by default). These contain the actual base64-encoded artifacts when S3 is disabled, or download links when S3 is enabled.
+- Completed responses for `CACHE_TTL_SECONDS` (seven days by default). These contain the actual base64-encoded artifacts when uploads are disabled, or download links when R2 or S3 is enabled. Cached links keep their original expiry; cache hits do not renew them.
 - A request counter for the legacy API. Authentication happens before counting, and the counter name contains no API key.
 
-This state belongs to one worker: caching, deduplication, and rate limits are not coordinated across workers. Restarting the bundled Redis process or replacing its container loses that state. This does not delete generated files, S3 objects, or the model and compiler caches on persistent storage.
+This state belongs to one worker: caching, deduplication, and rate limits are not coordinated across workers. Restarting the bundled Redis process or replacing its container loses that state. This does not delete generated files, R2/S3 objects, or the model and compiler caches on persistent storage.
 
 The local connection restriction prevents the worker from sending this state to an external Redis provider. Pod and host administrators can still inspect local processes. Data sent to an external Redis server by an older image remains there until separately removed; see [upgrading from external Redis](deployment.md#upgrading-from-external-redis).
 
-## S3 artifact uploads
+## Artifact uploads
 
-When `AWS_BUCKET_NAME` is unset, artifacts are returned inline as base64. When it is set, the handler uploads artifacts with `boto3` and returns presigned URLs.
+The serverless handler (`worker` and `local-api` modes) can upload generated images and videos to Cloudflare R2, AWS S3, or another S3-compatible endpoint using `boto3`. It returns presigned GET URLs valid for seven days. Uploads preserve the media `Content-Type` and use multipart transfers for large files. Upload failures fail the job after retries instead of silently returning inline data.
+
+When no artifact storage is configured, responses contain base64 data. Partial R2 configuration and endpoint settings without a bucket fail before rendering. The interactive pod frontend and direct ComfyUI jobs serve local files; they do not pass through the handler's artifact uploader.
+
+### Choose a provider during RunPod setup
+
+The RunPod template includes separate AWS S3 and Cloudflare R2 fields under advanced settings. Provider selection follows the supplied environment variables; no separate provider selector is required.
+
+| Provider | Fields to fill in |
+| --- | --- |
+| AWS S3 | `AWS_BUCKET_NAME`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_DEFAULT_REGION`. Leave all `R2_*` fields blank. |
+| Cloudflare R2 | `R2_BUCKET_NAME`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and either `R2_ACCOUNT_ID` or `R2_ENDPOINT_URL`. Leave the AWS artifact fields blank. |
+| Inline responses | Leave both providers' bucket, endpoint, and credential fields blank. |
+
+S3 takes precedence if `AWS_BUCKET_NAME` or the legacy `BUCKET_NAME` is set, even when R2 settings are also present. To use the dedicated R2 fields, leave both S3 bucket fields blank. These fields require the updated template and a container image built with this storage support; existing deployed images and templates must be updated separately.
+
+### Cloudflare R2
+
+1. Create an R2 bucket, such as `generated-artifacts`.
+2. Create an [R2 API token](https://developers.cloudflare.com/r2/api/tokens/) with **Object Read & Write** permission limited to that bucket. Copy the generated S3 **Access Key ID** and **Secret Access Key**; these are not the Cloudflare bearer API token.
+3. Use a container image built with R2 support. For a custom build, build for `linux/amd64`, publish it to your registry, and replace the image on your RunPod template.
+4. Set these worker environment variables, storing the credentials as RunPod secrets:
+
+```env
+R2_ACCOUNT_ID=<cloudflare-account-id>
+R2_BUCKET_NAME=generated-artifacts
+R2_ACCESS_KEY_ID=<r2-s3-access-key-id>
+R2_SECRET_ACCESS_KEY=<r2-s3-secret-access-key>
+```
+
+| Variable | Description |
+| --- | --- |
+| `R2_BUCKET_NAME` | Private R2 bucket used for generated artifacts. |
+| `R2_ACCOUNT_ID` | Constructs `https://<account-id>.r2.cloudflarestorage.com`. Required unless `R2_ENDPOINT_URL` is set. |
+| `R2_ENDPOINT_URL` | Optional full S3 API endpoint from the R2 dashboard. Overrides `R2_ACCOUNT_ID`; use this for jurisdiction-specific endpoints such as `https://<account-id>.eu.r2.cloudflarestorage.com`. |
+| `R2_ACCESS_KEY_ID` | R2 S3 access key ID with bucket-scoped read/write access. |
+| `R2_SECRET_ACCESS_KEY` | Matching R2 S3 secret access key. |
+
+When both `AWS_BUCKET_NAME` and `BUCKET_NAME` are unset, any nonempty `R2_*` setting selects R2 mode; the bucket, endpoint/account ID, and both R2 keys must be supplied. S3 bucket settings take precedence over R2 settings, including incomplete R2 settings. The R2 client uses region `auto`, Signature Version 4, and path-style addressing. Unrelated AWS session credentials are ignored in R2 mode. Blank template defaults do not enable R2.
+
+Use the S3 API endpoint, not an `r2.dev` URL or public custom domain. [R2 presigned URLs](https://developers.cloudflare.com/r2/api/s3/presigned-urls/) authorize access through the S3 endpoint; making the bucket public is unnecessary. Anyone holding a signed URL can read that object until it expires. Keep credentials on the RunPod worker and any signing backend, never in browser code or job input.
+
+### Existing AWS and RunPod template fields
+
+You can also keep the AWS fields in an existing RunPod template and add an endpoint override:
+
+```env
+AWS_BUCKET_NAME=generated-artifacts
+AWS_ACCESS_KEY_ID=<r2-s3-access-key-id>
+AWS_SECRET_ACCESS_KEY=<r2-s3-secret-access-key>
+AWS_ENDPOINT_URL=https://<cloudflare-account-id>.r2.cloudflarestorage.com
+```
+
+The original RunPod `BUCKET_NAME`, `BUCKET_ENDPOINT_URL`, `BUCKET_ACCESS_KEY_ID`, and `BUCKET_SECRET_ACCESS_KEY` fields are supported too. `AWS_BUCKET_NAME` takes precedence over `BUCKET_NAME`, and `AWS_ENDPOINT_URL` over `BUCKET_ENDPOINT_URL`. A nonempty legacy key pair is passed explicitly; otherwise boto3 resolves the usual AWS credentials. Always provide both legacy keys together. For R2 through these aliases, clear any unrelated `AWS_SESSION_TOKEN` when using the AWS credential fields.
+
+R2 endpoint hosts select region `auto`, even if the existing template defaults to `us-east-1`. Other custom endpoints use `AWS_DEFAULT_REGION`, `AWS_REGION`, or `BUCKET_REGION`, defaulting to `us-east-1`. When no custom endpoint is set, AWS retains boto3's normal endpoint, credential, and region resolution.
+
+### AWS S3
 
 | Variable | Description |
 | --- | --- |
 | `AWS_BUCKET_NAME` | Bucket used for generated artifacts. Enables S3 mode. |
-| `AWS_ACCESS_KEY_ID` | AWS access key ID with `s3:PutObject` access. |
+| `AWS_ACCESS_KEY_ID` | AWS access key ID with `s3:PutObject` and `s3:GetObject` access. |
 | `AWS_SECRET_ACCESS_KEY` | Matching secret access key. |
 | `AWS_DEFAULT_REGION` | Bucket region. |
+| `AWS_ENDPOINT_URL` | Optional S3-compatible API endpoint. Leave unset for ordinary AWS S3. |
+
+### Using artifact results in an application
+
+An application's backend submits a job to RunPod, then receives an artifact URL in each `output.images[]` or `output.videos[]` entry's `data` field with `type: "url"`. The legacy single-video route returns `video_url`. The response shape is unchanged.
+
+Workflow object keys are `renders/<job-id>/<two-digit-index>-<filename>`; the legacy route uses `renders/<job-id>.mp4`. Objects remain stored after the returned URL expires. For access beyond seven days, retain the bucket/object key and let the application's backend generate a fresh URL or serve the object through a Cloudflare Worker with an [R2 binding](https://developers.cloudflare.com/r2/get-started/workers-api/) to the same bucket.
+
+If browser code fetches the signed URL directly, configure [R2 CORS](https://developers.cloudflare.com/r2/buckets/cors/) for the application's actual origin. For example, replace the origin below in the bucket's CORS policy:
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://app.example.com"],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["Range"],
+    "ExposeHeaders": ["ETag", "Accept-Ranges", "Content-Range"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+R2 stores generated artifacts; the GPU still runs on RunPod and the attached network volume still holds models and runtime caches.
 
 Example workflow response:
 
@@ -118,7 +198,7 @@ Example workflow response:
       {
         "filename": "LTX-2.5_i2v.mp4",
         "type": "url",
-        "data": "https://example-bucket.s3.amazonaws.com/renders/job-123/00-LTX-2.5_i2v.mp4?...",
+        "data": "https://<account-id>.r2.cloudflarestorage.com/generated-artifacts/renders/job-123/00-LTX-2.5_i2v.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&...",
         "media_type": "video/mp4"
       }
     ]

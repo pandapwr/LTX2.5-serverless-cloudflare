@@ -22,6 +22,7 @@ import asyncio
 import aiohttp
 import boto3
 from pathlib import Path
+from urllib.parse import urlsplit
 from botocore.config import Config
 import redis.asyncio as redis
 
@@ -116,16 +117,100 @@ class GPUFleetManager:
         return best_node
 
 # --- 4. CLOUD NATIVE STORAGE ---
+def get_artifact_storage_config() -> tuple[str, dict] | None:
+    """Resolve R2, AWS, or legacy RunPod S3 settings from worker environment."""
+    r2_settings = (
+        "R2_BUCKET_NAME", "R2_ACCOUNT_ID", "R2_ENDPOINT_URL",
+        "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
+    )
+    bucket = os.environ.get("AWS_BUCKET_NAME") or os.environ.get("BUCKET_NAME")
+    client_options: dict = {}
+    # Preserve S3 selection when users also supply R2 settings.
+    if not bucket and any(os.environ.get(name) for name in r2_settings):
+        bucket = os.environ.get("R2_BUCKET_NAME")
+        endpoint = os.environ.get("R2_ENDPOINT_URL")
+        account_id = os.environ.get("R2_ACCOUNT_ID")
+        access_key = os.environ.get("R2_ACCESS_KEY_ID")
+        secret_key = os.environ.get("R2_SECRET_ACCESS_KEY")
+        if not all((bucket, endpoint or account_id, access_key, secret_key)):
+            raise RuntimeError(
+                "R2 uploads require R2_BUCKET_NAME, R2_ACCOUNT_ID or "
+                "R2_ENDPOINT_URL, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY."
+            )
+        client_options.update(
+            endpoint_url=(
+                endpoint or f"https://{account_id}.r2.cloudflarestorage.com"
+            ),
+            region_name="auto",
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            # Keep unrelated AWS session credentials out of R2 requests.
+            aws_session_token="",
+        )
+    else:
+        endpoint = (
+            os.environ.get("AWS_ENDPOINT_URL")
+            or os.environ.get("BUCKET_ENDPOINT_URL")
+        )
+        if not bucket:
+            if endpoint or os.environ.get("BUCKET_ACCESS_KEY_ID") or os.environ.get(
+                "BUCKET_SECRET_ACCESS_KEY"
+            ):
+                raise RuntimeError(
+                    "Artifact uploads require AWS_BUCKET_NAME or BUCKET_NAME."
+                )
+            return None
+
+        if endpoint:
+            hostname = urlsplit(endpoint).hostname or ""
+            if hostname.endswith(".r2.cloudflarestorage.com"):
+                region = "auto"
+            else:
+                region = (
+                    os.environ.get("AWS_DEFAULT_REGION")
+                    or os.environ.get("AWS_REGION")
+                    or os.environ.get("BUCKET_REGION")
+                    or "us-east-1"
+                )
+            client_options.update(endpoint_url=endpoint, region_name=region)
+        access_key = os.environ.get("BUCKET_ACCESS_KEY_ID")
+        secret_key = os.environ.get("BUCKET_SECRET_ACCESS_KEY")
+        if access_key or secret_key:
+            if not access_key or not secret_key:
+                raise RuntimeError(
+                    "Both BUCKET_ACCESS_KEY_ID and BUCKET_SECRET_ACCESS_KEY "
+                    "are required."
+                )
+            client_options.update(
+                aws_access_key_id=access_key,
+                aws_secret_access_key=secret_key,
+                aws_session_token="",
+            )
+
+    config_options = {"retries": {"max_attempts": 3, "mode": "standard"}}
+    if client_options.get("endpoint_url"):
+        config_options.update(
+            signature_version="s3v4",
+            s3={"addressing_style": "path"},
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
+        )
+    client_options["config"] = Config(**config_options)
+    return bucket, client_options
+
+
 async def upload_to_s3_with_retry(
     filepath: str, storage_key: str, content_type: str | None = None
 ) -> str:
-    bucket = os.environ.get("AWS_BUCKET_NAME")
-    if not bucket:
-        raise RuntimeError("AWS_BUCKET_NAME missing.")
-    
-    boto_config = Config(retries={'max_attempts': 3, 'mode': 'standard'})
+    storage_config = get_artifact_storage_config()
+    if storage_config is None:
+        raise RuntimeError(
+            "Configure R2_BUCKET_NAME, AWS_BUCKET_NAME, or BUCKET_NAME."
+        )
+    bucket, client_options = storage_config
+
     def _upload():
-        s3 = boto3.client('s3', config=boto_config)
+        s3 = boto3.client('s3', **client_options)
         extra_args = {'ContentType': content_type} if content_type else None
         if extra_args:
             s3.upload_file(filepath, bucket, storage_key, ExtraArgs=extra_args)
@@ -161,7 +246,7 @@ def decode_cached_response(raw_value: str) -> dict | None:
 
 
 async def build_result_payload(filepath: str, job_id: str) -> dict:
-    if os.environ.get("AWS_BUCKET_NAME"):
+    if get_artifact_storage_config() is not None:
         return {
             "video_url": await upload_to_s3_with_retry(
                 filepath,
@@ -174,7 +259,7 @@ async def build_result_payload(filepath: str, job_id: str) -> dict:
     if file_size_mb > MAX_INLINE_VIDEO_MB:
         raise RuntimeError(
             f"Video output is {file_size_mb:.1f}MB, which exceeds MAX_INLINE_VIDEO_MB={MAX_INLINE_VIDEO_MB}. "
-            "Configure S3 upload or raise the inline limit."
+            "Configure R2 or S3 uploads or raise the inline limit."
         )
 
     with open(filepath, "rb") as video_file:
@@ -235,16 +320,17 @@ async def build_output_entry(
 ) -> dict:
     media_type = guess_media_type(entry["filename"], entry["media_kind"])
     path = Path(filepath)
+    storage_enabled = get_artifact_storage_config() is not None
 
     if entry["media_kind"] == "video":
         file_size_mb = path.stat().st_size / (1024 * 1024)
-        if file_size_mb > MAX_INLINE_VIDEO_MB and not os.environ.get("AWS_BUCKET_NAME"):
+        if file_size_mb > MAX_INLINE_VIDEO_MB and not storage_enabled:
             raise RuntimeError(
                 f"Video output is {file_size_mb:.1f}MB, which exceeds MAX_INLINE_VIDEO_MB={MAX_INLINE_VIDEO_MB}. "
-                "Configure S3 upload or raise the inline limit."
+                "Configure R2 or S3 uploads or raise the inline limit."
             )
 
-    if os.environ.get("AWS_BUCKET_NAME"):
+    if storage_enabled:
         storage_key = f"renders/{job_id}/{index:02d}-{path.name}"
         data = await upload_to_s3_with_retry(filepath, storage_key, media_type)
         output_type = "url"
@@ -541,6 +627,8 @@ async def handler(job: dict) -> dict:
     await redis_client.expire(f"job_status:{job_id}", 3600)
 
     try:
+        # Reject incomplete storage settings before spending GPU time on a render.
+        get_artifact_storage_config()
         if is_workflow_job(job_input):
             response = await handle_workflow_job(job_id, job_input, start_time)
         else:

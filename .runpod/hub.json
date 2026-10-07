@@ -52,11 +52,61 @@
         }
       },
       {
+        "key": "R2_BUCKET_NAME",
+        "input": {
+          "name": "R2 Artifact Bucket",
+          "type": "string",
+          "description": "Optional Cloudflare R2 bucket for generated images and videos; used when AWS_BUCKET_NAME and BUCKET_NAME are unset",
+          "default": "",
+          "advanced": true
+        }
+      },
+      {
+        "key": "R2_ACCOUNT_ID",
+        "input": {
+          "name": "Cloudflare Account ID",
+          "type": "string",
+          "description": "Cloudflare account ID used to construct the R2 S3 endpoint",
+          "default": "",
+          "advanced": true
+        }
+      },
+      {
+        "key": "R2_ENDPOINT_URL",
+        "input": {
+          "name": "R2 S3 Endpoint Override",
+          "type": "string",
+          "description": "Optional full R2 S3 endpoint, including jurisdiction when required; overrides R2_ACCOUNT_ID",
+          "default": "",
+          "advanced": true
+        }
+      },
+      {
+        "key": "R2_ACCESS_KEY_ID",
+        "input": {
+          "name": "R2 Access Key ID",
+          "type": "string",
+          "description": "R2 S3 Access Key ID with Object Read & Write access to the artifact bucket",
+          "default": "",
+          "advanced": true
+        }
+      },
+      {
+        "key": "R2_SECRET_ACCESS_KEY",
+        "input": {
+          "name": "R2 Secret Access Key",
+          "type": "string",
+          "description": "Matching R2 S3 Secret Access Key; configure as a RunPod secret",
+          "default": "",
+          "advanced": true
+        }
+      },
+      {
         "key": "AWS_BUCKET_NAME",
         "input": {
-          "name": "S3 Bucket Name",
+          "name": "AWS S3 Bucket Name",
           "type": "string",
-          "description": "Optional AWS S3 bucket for generated artifacts",
+          "description": "Optional AWS S3 bucket for generated artifacts; takes precedence over Cloudflare R2",
           "default": "",
           "advanced": true
         }
@@ -64,7 +114,7 @@
       {
         "key": "AWS_ACCESS_KEY_ID",
         "input": {
-          "name": "S3 Access Key ID",
+          "name": "AWS S3 Access Key ID",
           "type": "string",
           "description": "AWS Access Key ID (if S3 upload is enabled)",
           "default": "",
@@ -74,7 +124,7 @@
       {
         "key": "AWS_SECRET_ACCESS_KEY",
         "input": {
-          "name": "S3 Secret Access Key",
+          "name": "AWS S3 Secret Access Key",
           "type": "string",
           "description": "AWS Secret Access Key (if S3 upload is enabled)",
           "default": "",
@@ -84,7 +134,7 @@
       {
         "key": "AWS_DEFAULT_REGION",
         "input": {
-          "name": "S3 Region",
+          "name": "AWS S3 Region",
           "type": "string",
           "description": "AWS region for optional S3 artifact uploads",
           "default": "us-east-1",

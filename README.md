@@ -10,6 +10,7 @@ Generate LTX 2.5 image-to-video on RunPod without rebuilding the same GPU enviro
 - A clean web frontend for quick image-to-video generation
 - ComfyUI for visual workflow editing and advanced control
 - A RunPod serverless handler for `/run` and `/runsync`
+- Cloudflare R2 or AWS S3 artifact uploads with private, signed download links
 - Automatic first-boot model downloads to persistent storage
 - Persistent models, ComfyUI state, Python environment, and caches under `/workspace`
 - Separate workflows for API execution and the ComfyUI editor
@@ -75,7 +76,22 @@ Submit the checked-in [LTX 2.5 API workflow](./video_ltx2_5_i2v_API.json) throug
 }
 ```
 
-`workflow` must contain a ComfyUI API-format workflow; the empty object above only shows the request structure. Results are returned in `output.images[]` and/or `output.videos[]`. S3 output is supported when configured; otherwise artifacts are returned inline.
+`workflow` must contain a ComfyUI API-format workflow; the empty object above only shows the request structure. Results are returned in `output.images[]` and/or `output.videos[]`. Cloudflare R2 and AWS S3 output are supported when configured; otherwise artifacts are returned inline.
+
+### Store artifacts in AWS S3 or Cloudflare R2
+
+The RunPod template exposes separate AWS S3 and Cloudflare R2 fields under advanced settings. Fill in the fields for your chosen provider, using RunPod secrets for the keys. For AWS S3, use `AWS_BUCKET_NAME`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_DEFAULT_REGION`. For R2, use:
+
+```env
+R2_ACCOUNT_ID=<cloudflare-account-id>
+R2_BUCKET_NAME=generated-artifacts
+R2_ACCESS_KEY_ID=<r2-s3-access-key-id>
+R2_SECRET_ACCESS_KEY=<r2-s3-secret-access-key>
+```
+
+Create an R2 API token with **Object Read & Write** permission restricted to that bucket. The worker uploads generated images and videos and returns signed download URLs. The bucket can remain private. Leave the unused provider's fields blank; AWS S3 takes precedence if both providers are configured. Leave both sets blank to return artifacts inline.
+
+Use a container image built with this storage support; changes require rebuilding the image and replacing the running containers. See [artifact storage configuration](docs/configuration.md#artifact-uploads) for endpoint overrides and browser CORS configuration.
 
 ## Option 2: Run as an interactive pod
 
